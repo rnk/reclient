@@ -28,6 +28,10 @@ func parseFlags(ctx context.Context, command []string, workingDir, execRoot stri
 		return nil, fmt.Errorf("insufficient number of arguments in command: %v", command)
 	}
 
+	if isTableGen(command[0]) {
+		return parseTableGenFlags(command, workingDir, execRoot)
+	}
+
 	res := &flags.CommandFlags{
 		WorkingDirectory: workingDir,
 		ExecRoot:         execRoot,

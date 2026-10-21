@@ -5,18 +5,24 @@ go_library(
     srcs = [
         "flagsparser.go",
         "preprocessor.go",
+        "tablegen.go",
     ],
     importpath = "github.com/bazelbuild/reclient/internal/pkg/inputprocessor/action/tool",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/pkg/inputprocessor",
         "//internal/pkg/inputprocessor/flags",
+        "//internal/pkg/pathtranslator",
+        "@com_github_bazelbuild_remote_apis_sdks//go/pkg/command",
     ],
 )
 
 go_test(
     name = "tool_test",
-    srcs = ["preprocessor_test.go"],
+    srcs = [
+        "preprocessor_test.go",
+        "tablegen_test.go",
+    ],
     embed = [":tool"],
     deps = [
         "//internal/pkg/execroot",

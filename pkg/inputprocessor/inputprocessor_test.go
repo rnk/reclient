@@ -1169,3 +1169,42 @@ func fromFile(t *testing.T, name string) []string {
 	}
 	return res
 }
+
+// Exercise label dispatch without explicit input/output manifests: this is the
+// path used by LLVM_TABLEGEN_LAUNCHER=rewrapper;--labels=type=tool.
+func TestTableGenToolLabels(t *testing.T) {
+	for _, sharder := range []bool{false, true} {
+		name, input := "mlir-tblgen", "src/TestOps.td"
+		if sharder {
+			name, input = "mlir-src-sharder", "src/TestOps.cpp"
+		}
+		t.Run(name, func(t *testing.T) {
+			er, cleanup := execroot.Setup(t, nil)
+			defer cleanup()
+			execroot.AddFilesWithContent(t, er, map[string][]byte{
+				"bin/" + name: nil, input: nil, "include/nested/Included.td": nil,
+			})
+			ds := &stubCPPDependencyScanner{}
+			ip := newInputProcessor(ds, dsTimeout, false, nil, localresources.NewDefaultManager(), nil, nil)
+			args := []string{filepath.Join(er, "bin", name), "-I" + filepath.Join(er, "include"), filepath.Join(er, input), "-o", "TestOps.inc", "-d", "TestOps.inc.d"}
+			if sharder {
+				args = append(args, "-op-shard-index=0")
+			}
+			got, err := ip.ProcessInputs(context.Background(), &ProcessInputsOptions{
+				ExecutionID: fakeExecutionID, Cmd: args, WorkingDir: "wd", ExecRoot: er,
+				Labels: map[string]string{"type": "tool"}, ExecStrategy: ppb.ExecutionStrategy_REMOTE,
+			}, &logger.LogRecord{LogRecord: &lpb.LogRecord{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			inputs := []string{"bin/" + name, input}
+			if !sharder {
+				inputs = append(inputs, "include/nested/Included.td")
+			}
+			want := &CommandIO{InputSpec: &command.InputSpec{Inputs: inputs}, OutputFiles: []string{"wd/TestOps.inc", "wd/TestOps.inc.d"}, EmittedDependencyFile: "wd/TestOps.inc.d"}
+			if diff := cmp.Diff(want, got, strSliceCmp); diff != "" {
+				t.Fatalf("(-want +got): %s", diff)
+			}
+		})
+	}
+}
