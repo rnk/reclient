@@ -16,7 +16,7 @@ package tool
 
 import (
 	"fmt"
-	"io/fs"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -99,24 +99,12 @@ func (p *Preprocessor) ComputeSpec() error {
 			continue
 		}
 		seen[dir] = true
-		err := filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
-			if err != nil {
-				return err
-			}
-			if entry.IsDir() {
-				// The SDK stages downloaded outputs here. These directories
-				// can disappear while another action is walking its includes.
-				if entry.Name() == ".reproxy_tmp" {
-					return fs.SkipDir
-				}
-				return nil
-			}
-			if filepath.Ext(path) != ".td" {
-				return nil
-			}
-			inputs = append(inputs, path)
-			return nil
-		})
+		// Like TableGen's include search, allow unused include directories that
+		// have not been generated yet. Other filesystem errors remain fatal.
+		if _, err := os.Stat(dir); os.IsNotExist(err) {
+			continue
+		}
+		err := walkTableGenInputs(dir, make(map[string]bool), &inputs)
 		if err != nil {
 			p.Err = fmt.Errorf("discovering TableGen inputs in %q: %w", dir, err)
 			return p.Err
@@ -125,5 +113,47 @@ func (p *Preprocessor) ComputeSpec() error {
 	p.AppendSpec(&inputprocessor.ActionSpec{InputSpec: &command.InputSpec{
 		Inputs: pathtranslator.ListRelToExecRoot(p.Options.ExecRoot, p.Options.WorkingDir, inputs),
 	}})
+	return nil
+}
+
+// Follow directory symlinks while retaining the paths used by the include
+// search. Track ancestors rather than all visited directories: two aliases of
+// the same directory must both be available in the remote input tree.
+func walkTableGenInputs(dir string, ancestors map[string]bool, inputs *[]string) error {
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return err
+	}
+	if ancestors[real] {
+		return nil
+	}
+	ancestors[real] = true
+	defer delete(ancestors, real)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		path := filepath.Join(dir, entry.Name())
+		isDir := entry.IsDir()
+		if entry.Type()&os.ModeSymlink != 0 {
+			info, err := os.Stat(path)
+			if err != nil {
+				return err
+			}
+			isDir = info.IsDir()
+		}
+		if isDir {
+			// The SDK stages outputs here; another action can remove them.
+			if entry.Name() == ".reproxy_tmp" {
+				continue
+			}
+			if err := walkTableGenInputs(path, ancestors, inputs); err != nil {
+				return err
+			}
+		} else if filepath.Ext(path) == ".td" {
+			*inputs = append(*inputs, path)
+		}
+	}
 	return nil
 }

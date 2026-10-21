@@ -16,6 +16,7 @@ package tool
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -111,5 +112,48 @@ func TestTableGenNonPathOptionValues(t *testing.T) {
 	}
 	if diff := cmp.Diff([]string{"input.td"}, got.TargetFilePaths); diff != "" {
 		t.Fatal(diff)
+	}
+}
+
+func TestTableGenIncludeDirectories(t *testing.T) {
+	for _, symlink := range []bool{false, true} {
+		name := "missing include"
+		if symlink {
+			name = "symlinked includes"
+		}
+		t.Run(name, func(t *testing.T) {
+			er, cleanup := execroot.Setup(t, nil)
+			defer cleanup()
+			execroot.AddFilesWithContent(t, er, map[string][]byte{
+				"bin/llvm-tblgen": nil, "src/main.td": nil,
+				"include/nested/Included.td":             nil,
+				"include/.reproxy_tmp/action/Ignored.td": nil,
+			})
+			args := []string{"../bin/llvm-tblgen", "../src/main.td", "-I", "../not-created", "-o", "out.inc"}
+			inputs := []string{"bin/llvm-tblgen", "src/main.td"}
+			if symlink {
+				if err := os.Symlink("include", filepath.Join(er, "linked")); err != nil {
+					t.Skipf("directory symlinks unavailable: %v", err)
+				}
+				if err := os.Symlink("../include", filepath.Join(er, "include", "alias")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("..", filepath.Join(er, "include", "nested", "cycle")); err != nil {
+					t.Fatal(err)
+				}
+				// A second alias must not be deduplicated by its resolved directory.
+				args = append(args, "-I", "../linked", "-I", "../include")
+				inputs = append(inputs, "linked/nested/Included.td", "include/nested/Included.td")
+			}
+			pp := &Preprocessor{&inputprocessor.BasePreprocessor{Ctx: context.Background()}}
+			got, err := inputprocessor.Compute(pp, inputprocessor.Options{ExecRoot: er, WorkingDir: "wd", Cmd: args})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := &inputprocessor.ActionSpec{InputSpec: &command.InputSpec{Inputs: inputs}, OutputFiles: []string{"wd/out.inc"}}
+			if diff := cmp.Diff(want, got, strSliceCmp); diff != "" {
+				t.Fatalf("(-want +got): %s", diff)
+			}
+		})
 	}
 }
